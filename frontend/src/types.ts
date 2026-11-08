@@ -35,3 +35,19 @@ export interface Log {
   cars_outside_slots: number;
   created_at: string;
 }
+
+// ---------- user accounts ----------
+
+export type Role = "driver" | "operator";
+
+export interface User {
+  id: number;
+  full_name: string;
+  email: string;
+  role: Role; // the first registered account is the operator (admin)
+}
+
+export interface AuthResponse {
+  token: string;
+  user: User;
+}
