@@ -49,7 +49,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export const getStatus = () => request<Status>("/api/status");
 export const getSlots = () => request<Slot[]>("/api/slots");
-export const getLogs = () => request<Log[]>("/api/logs?limit=15");
+export const getLogs = (limit = 15) => request<Log[]>(`/api/logs?limit=${limit}`);
 
 // ---------- user accounts ----------
 
