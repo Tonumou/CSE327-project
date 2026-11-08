@@ -9,34 +9,54 @@ import string
 import threading
 import time
 from typing import Optional
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-import pymysql
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
-# Import database settings from main backend
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
-import config
 import database
+from auth import require_operator
 
 router = APIRouter(prefix="/api/reservations", tags=["Reservations"])
 
 GRACE_PERIOD_MINUTES = 15
 
+# Hourly tariff per slot type (used when an operator changes a slot's type)
+SLOT_TYPE_RATES = {"standard": 2.50, "ev_charging": 5.00, "handicapped": 2.50}
+
 # ---------- Pydantic Request Models ----------
 
 class ReservationCreate(BaseModel):
     slot_id: int
-    driver_name: str
-    driver_email: str
-    license_plate: str
-    duration_hours: int = 1
+    driver_name: str = Field(min_length=1, max_length=100)
+    driver_email: str = Field(min_length=3, max_length=120)
+    license_plate: str = Field(min_length=1, max_length=30)
+    duration_hours: int = Field(default=1, ge=1, le=24)
     slot_type: Optional[str] = "standard"
 
 
 class CheckinRequest(BaseModel):
     checkin_pin: str
+
+
+class SlotTypeUpdate(BaseModel):
+    slot_type: str
+
+
+def _iso(value):
+    """DATETIME -> '2026-11-08T18:30:00' (browser-friendly), None stays None."""
+    return value.isoformat(timespec="seconds") if value else None
+
+
+def _public(res: dict) -> dict:
+    """JSON-friendly reservation row. The check-in PIN is never sent back in lists:
+    only the driver who booked sees it (in the create response)."""
+    out = {k: v for k, v in res.items() if k != "checkin_pin"}
+    for key in ("start_time", "end_time", "grace_deadline", "checked_in_at", "created_at"):
+        if key in out:
+            out[key] = _iso(out[key])
+    for key in ("total_price", "hourly_rate"):
+        if out.get(key) is not None:
+            out[key] = float(out[key])
+    return out
 
 
 # ---------- Database Helpers ----------
@@ -102,7 +122,6 @@ def ensure_reservation_tables():
 @router.get("/active")
 def get_active_reservations():
     """Return all currently pending or active driver reservations."""
-    ensure_reservation_tables()
     conn = database.get_connection()
     with conn.cursor() as cur:
         cur.execute("""
@@ -114,25 +133,47 @@ def get_active_reservations():
         """)
         rows = cur.fetchall()
     conn.close()
+    return [_public(r) for r in rows]
 
-    for r in rows:
-        r["start_time"] = str(r["start_time"])
-        r["end_time"] = str(r["end_time"])
-        r["grace_deadline"] = str(r["grace_deadline"])
-        r["created_at"] = str(r["created_at"])
-        if r.get("checked_in_at"):
-            r["checked_in_at"] = str(r["checked_in_at"])
-        if r.get("total_price") is not None:
-            r["total_price"] = float(r["total_price"])
-        if r.get("hourly_rate") is not None:
-            r["hourly_rate"] = float(r["hourly_rate"])
-    return rows
+
+@router.get("/{res_id}")
+def get_reservation(res_id: int):
+    """One reservation (the booking page uses it to follow its ticket's status)."""
+    conn = database.get_connection()
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT r.*, s.slot_code, s.slot_type, s.hourly_rate
+            FROM reservations r
+            JOIN slots s ON r.slot_id = s.id
+            WHERE r.id = %s
+        """, (res_id,))
+        res = cur.fetchone()
+    conn.close()
+    if not res:
+        raise HTTPException(404, "Reservation not found")
+    return _public(res)
+
+
+@router.put("/slots/{slot_id}/type", dependencies=[Depends(require_operator)])
+def set_slot_type(slot_id: int, body: SlotTypeUpdate):
+    """Operator marks a slot as standard / EV charging / handicapped (sets its tariff too)."""
+    if body.slot_type not in SLOT_TYPE_RATES:
+        raise HTTPException(400, f"slot_type must be one of {', '.join(SLOT_TYPE_RATES)}")
+    conn = database.get_connection()
+    with conn.cursor() as cur:
+        changed = cur.execute(
+            "UPDATE slots SET slot_type = %s, hourly_rate = %s WHERE id = %s",
+            (body.slot_type, SLOT_TYPE_RATES[body.slot_type], slot_id),
+        )
+    conn.close()
+    if not changed:
+        raise HTTPException(404, "Slot not found")
+    return {"id": slot_id, "slot_type": body.slot_type, "hourly_rate": SLOT_TYPE_RATES[body.slot_type]}
 
 
 @router.post("")
 def create_reservation(data: ReservationCreate):
     """Book a vacant parking slot."""
-    ensure_reservation_tables()
     conn = database.get_connection()
     with conn.cursor() as cur:
         # Check slot availability
@@ -180,7 +221,7 @@ def create_reservation(data: ReservationCreate):
         "slot_code": slot["slot_code"],
         "checkin_pin": pin,
         "total_price": total_price,
-        "grace_deadline": str(grace_deadline),
+        "grace_deadline": _iso(grace_deadline),
         "message": f"Slot {slot['slot_code']} reserved! Check in within 15 minutes."
     }
 
@@ -228,9 +269,15 @@ def cancel_reservation(res_id: int):
             conn.close()
             raise HTTPException(404, "Reservation not found")
 
+        if res["status"] not in ("pending", "active"):
+            conn.close()
+            raise HTTPException(400, f"Reservation is already {res['status']}")
+
         cur.execute("UPDATE reservations SET status = 'cancelled' WHERE id = %s", (res_id,))
-        # Free up slot
-        cur.execute("UPDATE slots SET status = 'free' WHERE id = %s", (res["slot_id"],))
+        # Free up the slot only if it is still held for this booking; if a car is
+        # physically parked there the camera keeps it 'occupied'.
+        cur.execute("UPDATE slots SET status = 'free' WHERE id = %s AND status = 'reserved'",
+                    (res["slot_id"],))
     conn.close()
     return {"message": "Reservation cancelled. Slot is now free.", "status": "cancelled"}
 
@@ -259,7 +306,10 @@ class GracePeriodWorker:
                 for row in expired:
                     print(f"[GraceWorker] Reservation {row['reservation_code']} expired! Auto-releasing slot.")
                     cur.execute("UPDATE reservations SET status = 'expired' WHERE id = %s", (row["id"],))
-                    cur.execute("UPDATE slots SET status = 'free' WHERE id = %s", (row["slot_id"],))
+                    cur.execute(
+                        "UPDATE slots SET status = 'free' WHERE id = %s AND status = 'reserved'",
+                        (row["slot_id"],),
+                    )
 
             conn.close()
         except Exception as e:
