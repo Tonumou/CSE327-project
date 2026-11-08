@@ -41,5 +41,6 @@ CREATE TABLE IF NOT EXISTS reservations (
 );
 
 -- Index for fast lookup of pending/active bookings
-CREATE INDEX idx_reservations_status ON reservations(status);
-CREATE INDEX idx_reservations_grace ON reservations(grace_deadline, status);
+-- (IF NOT EXISTS so the file can be imported again without errors)
+CREATE INDEX IF NOT EXISTS idx_reservations_status ON reservations(status);
+CREATE INDEX IF NOT EXISTS idx_reservations_grace ON reservations(grace_deadline, status);
