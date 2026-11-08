@@ -177,8 +177,17 @@ NOT needed to run it.
 STEP 8 - USE IT
 =====================================================================
 
-1. Live Dashboard -> "Camera Source" box -> green button
-   "Upload Photo / Video". Choose a parking-lot photo taken from above
+0. Create your account: click "Register", enter name, email and a
+   password (at least 6 characters).
+     - The FIRST account ever created is the OPERATOR (admin). Only
+       the operator can upload pictures, change the camera and use
+       the "Slot Setup" page - so register yourself first.
+     - Everyone who registers after that is a DRIVER: they can see
+       the live dashboard and history, and reserve a spot.
+   The moon / sun button switches between dark and light mode.
+
+1. Live Dashboard -> "Camera source" box -> drag a photo or video
+   into the box (or click "browse"). Choose a parking-lot photo taken from above
    (drone / high CCTV view works best; free photos: pexels.com, search
    "parking lot aerial").
 2. The AI finds the cars and the parking spaces by itself:
@@ -188,8 +197,15 @@ STEP 8 - USE IT
      - "Rectangle (drag)" or "4 corners (click)" to draw a missing
        space by hand
      - "Delete" to remove a wrong slot
-4. For a live webcam: type 0 in the Camera Source box and click "Use".
+4. For a live webcam: click "Use the webcam" in the Camera source box.
    For a CCTV camera: type its rtsp://... address and click "Use".
+5. "Reserve a Spot": book a free space; enter the 4-digit PIN within
+   15 minutes to check in. "History": chart of free / occupied
+   spaces over time (CSV download).
+
+Forgot the operator password? Reset the accounts in cmd (this deletes
+all accounts; the next one registered becomes the operator again):
+    C:\xampp\mysql\bin\mysql.exe -u root -e "DELETE FROM smart_parking.users;"
 
 
 =====================================================================
