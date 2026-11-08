@@ -9,13 +9,15 @@ import shutil
 from contextlib import asynccontextmanager
 
 import pymysql
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 import config
 import database
+from auth import ensure_auth_tables, require_operator
+from auth import router as auth_router
 from detector import detector
 
 
@@ -23,6 +25,7 @@ from detector import detector
 async def lifespan(app: FastAPI):
     # runs once when the server starts
     database.init_database()
+    ensure_auth_tables()         # user accounts: login / registration
     os.makedirs(config.UPLOAD_DIR, exist_ok=True)
     detector.start()
     yield
@@ -39,6 +42,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
+
+# endpoints that change the set-up need a logged-in operator (see auth.py)
+OPERATOR_ONLY = [Depends(require_operator)]
 
 
 # ---------- request bodies ----------
@@ -89,7 +96,7 @@ def sort_corners(points):
     return sorted(points, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
 
 
-@app.post("/api/slots")
+@app.post("/api/slots", dependencies=OPERATOR_ONLY)
 def create_slot(slot: SlotIn):
     points = None
     if slot.points:
@@ -112,7 +119,7 @@ def create_slot(slot: SlotIn):
     return {"id": new_id}
 
 
-@app.post("/api/slots/auto")
+@app.post("/api/slots/auto", dependencies=OPERATOR_ONLY)
 def auto_slots():
     """Let the AI find all parking spaces in the current picture (replaces all slots)."""
     try:
@@ -121,13 +128,13 @@ def auto_slots():
         raise HTTPException(400, str(e))
 
 
-@app.delete("/api/slots/{slot_id}")
+@app.delete("/api/slots/{slot_id}", dependencies=OPERATOR_ONLY)
 def remove_slot(slot_id: int):
     database.delete_slot(slot_id)
     return {"deleted": slot_id}
 
 
-@app.delete("/api/slots")
+@app.delete("/api/slots", dependencies=OPERATOR_ONLY)
 def remove_all_slots():
     database.delete_all_slots()
     return {"deleted": "all"}
@@ -143,14 +150,14 @@ def get_frame(annotated: bool = True):
                     headers={"Cache-Control": "no-store"})
 
 
-@app.post("/api/source")
+@app.post("/api/source", dependencies=OPERATOR_ONLY)
 def change_source(body: SourceIn):
     """Use a webcam index ("0"), a file path or an RTSP/HTTP camera URL."""
     detector.set_source(body.source.strip())
     return {"source": detector.source}
 
 
-@app.post("/api/source/upload")
+@app.post("/api/source/upload", dependencies=OPERATOR_ONLY)
 def upload_source(file: UploadFile = File(...)):
     """Upload a parking-lot photo or video and start analysing it."""
     ext = os.path.splitext(file.filename)[1].lower()
