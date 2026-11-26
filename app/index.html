@@ -4,10 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Smart Parking</title>
-    <script type="module" crossorigin src="./assets/index-raEf1iGh.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-Dlkv9Oxp.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@500;600&family=Public+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      // apply the saved theme before the page draws (no white flash in dark mode)
+      try {
+        const t = localStorage.getItem("smart-parking-theme");
+        if (t === "dark" || ((!t || t === "system") && matchMedia("(prefers-color-scheme: dark)").matches))
+          document.documentElement.classList.add("dark");
+      } catch {}
+    </script>
+    <script type="module" crossorigin src="./assets/index-D6pTY9dG.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-B1-mSuSD.css">
   </head>
-  <body class="bg-slate-100">
+  <body>
     <div id="root"></div>
   </body>
 </html>
