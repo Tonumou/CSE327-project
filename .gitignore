@@ -1,0 +1,19 @@
+# Python
+backend/venv/
+__pycache__/
+*.pyc
+
+# YOLO model files - downloaded automatically on first start
+*.pt
+
+# Photos / videos uploaded on the website
+backend/uploads/
+
+# Node.js libraries - recreated with "npm install"
+frontend/node_modules/
+
+# Editor / OS files
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

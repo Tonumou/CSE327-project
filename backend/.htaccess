@@ -1,0 +1,2 @@
+# Python files are run by Uvicorn, not Apache - never serve them as web pages
+Require all denied
