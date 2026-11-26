@@ -1,8 +1,12 @@
 // All calls to the FastAPI backend live in this file
 import type {
   AuthResponse,
+  BookingTicket,
   Log,
+  NewReservation,
+  Reservation,
   Slot,
+  SlotType,
   Status,
   User,
 } from "./types";
@@ -113,3 +117,29 @@ export const uploadSource = (file: File) => {
 // "t" changes every call so the browser never shows a cached picture
 export const frameUrl = (annotated: boolean) =>
   `${API_URL}/api/frame?annotated=${annotated}&t=${Date.now()}`;
+
+// ---------- Feature 3: reservations (Tamanna Akter Mou) ----------
+
+const json = (body: unknown): RequestInit => ({
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+export const createReservation = (data: NewReservation) =>
+  request<BookingTicket>("/api/reservations", json(data));
+
+export const getReservation = (id: number) => request<Reservation>(`/api/reservations/${id}`);
+
+export const checkinReservation = (id: number, checkin_pin: string) =>
+  request<{ message: string; status: string }>(`/api/reservations/${id}/checkin`, json({ checkin_pin }));
+
+export const cancelReservation = (id: number) =>
+  request<{ message: string; status: string }>(`/api/reservations/${id}/cancel`, { method: "POST" });
+
+export const setSlotType = (slotId: number, slot_type: SlotType) =>
+  request(`/api/reservations/slots/${slotId}/type`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slot_type }),
+  });

@@ -78,7 +78,7 @@ class SlotDetector:
         self.frame_width = 0
         self.frame_height = 0
         self.stats = {
-            "total_slots": 0, "free_slots": 0, "occupied_slots": 0,
+            "total_slots": 0, "free_slots": 0, "occupied_slots": 0, "reserved_slots": 0,
             "cars_detected": 0, "cars_outside_slots": 0, "last_update": None,
         }
         self.last_log_time = 0
@@ -192,13 +192,20 @@ class SlotDetector:
 
         # 2) decide the status of every slot
         free = 0
+        reserved = 0
         for slot, poly, contrast in zip(slots, slot_polys, contrasts):
             best = max((overlap_ratio(poly, car) for car, _ in cars), default=0.0)
             seen_by_yolo = best >= config.OCCUPIED_OVERLAP
             looks_busy = config.VISUAL_CHECK and len(slots) > 1 and contrast > busy_limit
             new_status = "occupied" if seen_by_yolo or looks_busy else "free"
+            # a booked slot stays 'reserved' while it is empty; only the reservation
+            # system (check-in / cancel / grace-period expiry) releases it
+            if slot["status"] == "reserved" and new_status == "free":
+                new_status = "reserved"
             if new_status == "free":
                 free += 1
+            elif new_status == "reserved":
+                reserved += 1
             if new_status != slot["status"]:          # only write changes
                 database.update_slot_status(slot["id"], new_status)
             slot["status"] = new_status
@@ -216,7 +223,8 @@ class SlotDetector:
         for car, _ in cars:
             cv2.polylines(annotated, [car.astype(np.int32)], True, (0, 165, 255), 2 * scale)
         for slot, poly in zip(slots, slot_polys):
-            color = (0, 0, 255) if slot["status"] == "occupied" else (0, 200, 0)  # BGR
+            color = {"occupied": (0, 0, 255), "reserved": (0, 215, 255)}.get(
+                slot["status"], (0, 200, 0))  # BGR: red / yellow / green
             cv2.polylines(annotated, [poly.astype(np.int32)], True, color, 3 * scale)
             cv2.putText(annotated, slot["slot_code"],
                         (slot["x1"] + 5 * scale, slot["y1"] + 25 * scale),
@@ -230,7 +238,8 @@ class SlotDetector:
         self.stats = {
             "total_slots": total,
             "free_slots": free,
-            "occupied_slots": total - free,
+            "occupied_slots": total - free - reserved,
+            "reserved_slots": reserved,
             "cars_detected": len(cars),
             "cars_outside_slots": outside,
             "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),

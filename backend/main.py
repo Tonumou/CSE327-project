@@ -19,18 +19,23 @@ import database
 from auth import ensure_auth_tables, require_operator
 from auth import router as auth_router
 from detector import detector
+from reservation_backend import ensure_reservation_tables, grace_worker
+from reservation_backend import router as reservation_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # runs once when the server starts
     database.init_database()
+    ensure_reservation_tables()  # Feature 3 (Mou): reservations table + slot type/tariff
     ensure_auth_tables()         # user accounts: login / registration
     os.makedirs(config.UPLOAD_DIR, exist_ok=True)
     detector.start()
+    grace_worker.start()         # auto-releases bookings after the 15-minute grace period
     yield
     # runs once when the server stops
     detector.stop()
+    grace_worker.stop()
 
 
 app = FastAPI(title="Smart Parking API", lifespan=lifespan)
@@ -42,6 +47,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(reservation_router)
 app.include_router(auth_router)
 
 # endpoints that change the set-up need a logged-in operator (see auth.py)
