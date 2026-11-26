@@ -17,3 +17,6 @@ frontend/node_modules/
 .idea/
 Thumbs.db
 desktop.ini
+
+# Office temporary lock files (created while a document is open)
+~$*
