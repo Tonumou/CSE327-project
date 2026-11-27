@@ -19,6 +19,8 @@ import database
 from auth import ensure_auth_tables, require_operator
 from auth import router as auth_router
 from detector import detector
+from ev_charging import ensure_ev_columns, ev_turnover_check
+from ev_charging import router as ev_router
 from notifications import ensure_notification_table
 from notifications import router as notification_router
 from penalties import ensure_penalty_columns
@@ -38,9 +40,11 @@ async def lifespan(app: FastAPI):
     ensure_notification_table()  # personal messages shown under the bell
     ensure_penalty_columns()     # Feature 3: no-show fees
     ensure_waitlist_table()      # Feature 3: queue for a full car park
+    ensure_ev_columns()          # Feature 4: EV idle fee + turnover stage
     os.makedirs(config.UPLOAD_DIR, exist_ok=True)
     detector.start()
-    grace_worker.add_job(assign_waitlist)  # freed spaces go to the first driver in the queue
+    grace_worker.add_job(assign_waitlist)     # freed spaces go to the first driver in the queue
+    grace_worker.add_job(ev_turnover_check)   # Feature 4: "charging done, please move" messages
     grace_worker.start()         # auto-releases bookings after the 15-minute grace period
     yield
     # runs once when the server stops
@@ -62,6 +66,7 @@ app.include_router(auth_router)
 app.include_router(notification_router)
 app.include_router(penalty_router)
 app.include_router(waitlist_router)
+app.include_router(ev_router)
 
 # endpoints that change the set-up need a logged-in operator (see auth.py)
 OPERATOR_ONLY = [Depends(require_operator)]

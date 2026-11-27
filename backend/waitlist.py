@@ -13,7 +13,7 @@
 # directly, or when the waiting time they chose is over.
 # ------------------------------------------------------------
 import datetime
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -35,6 +35,7 @@ class WaitlistJoin(BaseModel):
     driver_email: str = Field(min_length=3, max_length=120)
     license_plate: str = Field(min_length=1, max_length=30)
     duration_hours: int = Field(default=1, ge=1, le=24)
+    charging_minutes: Optional[int] = Field(default=None, ge=15, le=480)  # EV queue only (Feature 4)
     wait_minutes: int = Field(default=60, ge=15, le=240)  # leave the queue after this
 
 
@@ -50,6 +51,7 @@ def ensure_waitlist_table():
               license_plate VARCHAR(30) NOT NULL,
               slot_type ENUM('standard', 'ev_charging', 'handicapped') NOT NULL DEFAULT 'standard',
               duration_hours INT NOT NULL DEFAULT 1,
+              charging_minutes INT NULL,
               status ENUM('waiting', 'assigned', 'left', 'timed_out') NOT NULL DEFAULT 'waiting',
               reservation_id INT NULL,
               created_at DATETIME NOT NULL,
@@ -58,6 +60,7 @@ def ensure_waitlist_table():
               INDEX idx_waitlist_queue (status, slot_type, created_at),
               CONSTRAINT fk_waitlist_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )""")
+        database.add_column(cur, "waitlist", "charging_minutes", "INT NULL AFTER duration_hours")
     conn.close()
 
 
@@ -105,7 +108,8 @@ def assign_waitlist(cur):
                 continue  # nothing free for this type yet: keep waiting
             try:
                 ticket = rb.insert_reservation(cur, entry["user_id"], slot, entry["driver_name"],
-                                               entry["driver_email"], entry["license_plate"], entry["duration_hours"])
+                                               entry["driver_email"], entry["license_plate"], entry["duration_hours"],
+                                               entry["charging_minutes"])
             except Exception:
                 rb.release_slot(cur, slot["id"])
                 raise
@@ -135,10 +139,11 @@ def join_waitlist(body: WaitlistJoin, user=Depends(require_user)):
                 raise HTTPException(400, "You are already on the waitlist.")
             cur.execute("""
                 INSERT INTO waitlist (user_id, driver_name, driver_email, license_plate, slot_type,
-                                      duration_hours, created_at, expires_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                                      duration_hours, charging_minutes, created_at, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (user["id"], body.driver_name.strip(), body.driver_email.strip(),
                          body.license_plate.strip().upper(), body.slot_type, body.duration_hours,
+                         body.charging_minutes if body.slot_type == "ev_charging" else None,
                          now, now + datetime.timedelta(minutes=body.wait_minutes)))
         with conn.cursor() as cur:
             assign_waitlist(cur)  # a matching space may be free right now
