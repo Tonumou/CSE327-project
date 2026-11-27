@@ -31,10 +31,16 @@ CREATE TABLE IF NOT EXISTS users (
   id             INT AUTO_INCREMENT PRIMARY KEY,
   full_name      VARCHAR(100) NOT NULL,
   email          VARCHAR(120) NOT NULL UNIQUE,
-  password_hash  VARCHAR(200) NOT NULL,
+  password_hash  VARCHAR(200) NULL,         -- NULL = Google account without a password
+  google_id      VARCHAR(64)  NULL UNIQUE,  -- Feature 5: Google sign-in
   role           ENUM('driver', 'operator') NOT NULL DEFAULT 'driver',
   created_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- users tables made before Google sign-in
+ALTER TABLE users
+  MODIFY COLUMN password_hash VARCHAR(200) NULL,
+  ADD COLUMN IF NOT EXISTS google_id VARCHAR(64) NULL UNIQUE AFTER password_hash;
 
 -- ------------------------------------------------------------
 -- 3. Table: reservations

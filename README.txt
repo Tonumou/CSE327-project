@@ -228,6 +228,47 @@ all accounts; the next one registered becomes the operator again):
 
 
 =====================================================================
+GOOGLE SIGN-IN ("Continue with Google") - ONE-TIME SET-UP
+=====================================================================
+
+Email + password login works without this. Until it is set up, the
+"Continue with Google" button only explains that it is not set up yet.
+
+1. Open https://console.cloud.google.com and sign in with a Google
+   account. Create a project (e.g. "smart-parking").
+2. Menu -> "APIs & Services" -> "OAuth consent screen" (newer
+   consoles: "Google Auth Platform"). Fill in the app name and your
+   email, choose "External". While the app is in "Testing", add the
+   Gmail addresses that may sign in as "Test users".
+3. "Credentials" (or "Clients") -> "Create credentials" -> "OAuth
+   client ID" -> Application type "Web application".
+   Under "Authorized JavaScript origins" add the addresses you open
+   the website on:
+       http://localhost
+       http://localhost:8080     (if Apache uses port 8080)
+       http://localhost:5173     (only for "npm run dev")
+   No redirect URI is needed. Click "Create".
+4. Copy the "Client ID" (it ends with .apps.googleusercontent.com)
+   into backend\config.py:
+       GOOGLE_CLIENT_ID = "1234-abc.apps.googleusercontent.com"
+5. Install the Google library once (it is in requirements.txt):
+       cd C:\xampp\htdocs\smart-parking\backend
+       venv\Scripts\activate
+       pip install -r requirements.txt
+   then start the backend again (uvicorn ...).
+6. Reload the website: Google's own button appears. Open the site as
+   http://localhost/... (not 127.0.0.1) - Google only accepts the
+   origins from step 3.
+
+How it works: Google gives the browser a signed ID token; the backend
+checks it with Google's official google-auth library (signature, expiry,
+issuer and that it was made for our Client ID) and logs that account in.
+The first Google sign-in creates the account (or links it to an account
+with the same email). Such an account can set a password in Settings to
+also sign in with email.
+
+
+=====================================================================
 EVERY DAY AFTER INSTALLATION
 =====================================================================
 
