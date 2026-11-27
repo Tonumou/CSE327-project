@@ -4,6 +4,7 @@ import type {
   AuthResponse,
   BookingTicket,
   EvStatus,
+  GoogleConfig,
   Log,
   NewReservation,
   NewWaitlistEntry,
@@ -71,6 +72,12 @@ export const loginUser = (email: string, password: string) =>
   request<AuthResponse>("/api/auth/login", post({ email, password }));
 
 export const getMe = () => request<User>("/api/auth/me");
+
+// Feature 5: Google sign-in. The credential is the ID token Google gave the browser.
+export const getGoogleConfig = () => request<GoogleConfig>("/api/auth/google/config");
+
+export const googleLogin = (credential: string) =>
+  request<AuthResponse & { created: boolean }>("/api/auth/google", post({ credential }));
 
 export const logoutUser = () => request("/api/auth/logout", { method: "POST" });
 

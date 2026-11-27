@@ -10,6 +10,7 @@ import { usePrefs } from "../prefs";
 import { useTheme } from "../theme";
 import type { ThemeMode } from "../theme";
 import { useToast } from "../toast";
+import { GoogleLogo } from "./GoogleButton";
 
 function Section({ icon, title, hint, children }: { icon: ReactNode; title: string; hint: string; children: ReactNode }) {
   return (
@@ -77,14 +78,18 @@ export default function Settings() {
     }
   };
 
+  // Feature 5: an account made with Google has no password until it sets one here
+  const noPassword = user?.has_password === false;
+
   const savePassword = async (e: FormEvent) => {
     e.preventDefault();
     if (pw.next !== pw.confirm) return toast("error", "The new passwords do not match.");
     setSavingPw(true);
     try {
-      await changePassword(pw.current, pw.next);
+      await changePassword(noPassword ? "" : pw.current, pw.next);
       setPw({ current: "", next: "", confirm: "" });
-      toast("success", "Password changed. Other devices were logged out.");
+      if (user && noPassword) updateUser({ ...user, has_password: true });
+      toast("success", noPassword ? "Password set. You can now also sign in with your email." : "Password changed. Other devices were logged out.");
     } catch (err) {
       toast("error", (err as Error).message);
     } finally {
@@ -117,8 +122,15 @@ export default function Settings() {
           <div>
             <p className="font-semibold">{user.full_name}</p>
             <p className="text-sm text-stone-500">{user.email}</p>
-            <span className="chip mt-1 bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
-              <ShieldCheck className="size-3.5" /> {user.role === "operator" ? "Operator (admin)" : "Driver"}
+            <span className="mt-1 flex flex-wrap gap-1.5">
+              <span className="chip bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+                <ShieldCheck className="size-3.5" /> {user.role === "operator" ? "Operator (admin)" : "Driver"}
+              </span>
+              {user.google && (
+                <span className="chip bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300">
+                  <GoogleLogo className="size-3.5" /> Google account linked
+                </span>
+              )}
             </span>
           </div>
         </div>
@@ -139,7 +151,11 @@ export default function Settings() {
       </Item>
 
       <Item>
-      <Section icon={<KeyRound className="size-5" />} title="Password" hint="Changing it logs you out on every other device">
+      <Section
+        icon={<KeyRound className="size-5" />}
+        title={noPassword ? "Set a password" : "Password"}
+        hint={noPassword ? "You sign in with Google. Add a password to also sign in with your email." : "Changing it logs you out on every other device"}
+      >
         <form onSubmit={savePassword} className="space-y-3">
           {(
             [
@@ -147,23 +163,25 @@ export default function Settings() {
               ["next", "New password", "new-password"],
               ["confirm", "Repeat new password", "new-password"],
             ] as const
-          ).map(([key, label, auto]) => (
-            <label key={key} className="block text-sm font-medium">
-              {label}
-              <input
-                type="password"
-                className="input mt-1.5"
-                value={pw[key]}
-                onChange={(e) => setPw({ ...pw, [key]: e.target.value })}
-                autoComplete={auto}
-                required
-                minLength={key === "current" ? 1 : 6}
-              />
-            </label>
-          ))}
+          )
+            .filter(([key]) => !(noPassword && key === "current"))
+            .map(([key, label, auto]) => (
+              <label key={key} className="block text-sm font-medium">
+                {label}
+                <input
+                  type="password"
+                  className="input mt-1.5"
+                  value={pw[key]}
+                  onChange={(e) => setPw({ ...pw, [key]: e.target.value })}
+                  autoComplete={auto}
+                  required
+                  minLength={key === "current" ? 1 : 6}
+                />
+              </label>
+            ))}
           {pw.confirm && pw.next !== pw.confirm && <p className="text-xs text-rose-500">The new passwords do not match.</p>}
           <button className="btn-primary" disabled={savingPw}>
-            {savingPw ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />} Change password
+            {savingPw ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />} {noPassword ? "Set password" : "Change password"}
           </button>
         </form>
       </Section>
