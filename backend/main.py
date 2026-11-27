@@ -25,6 +25,8 @@ from penalties import ensure_penalty_columns
 from penalties import router as penalty_router
 from reservation_backend import ensure_reservation_tables, grace_worker
 from reservation_backend import router as reservation_router
+from waitlist import assign_waitlist, ensure_waitlist_table
+from waitlist import router as waitlist_router
 
 
 @asynccontextmanager
@@ -35,8 +37,10 @@ async def lifespan(app: FastAPI):
     ensure_reservation_tables()  # Feature 3 (Mou): reservations table + slot type/tariff
     ensure_notification_table()  # personal messages shown under the bell
     ensure_penalty_columns()     # Feature 3: no-show fees
+    ensure_waitlist_table()      # Feature 3: queue for a full car park
     os.makedirs(config.UPLOAD_DIR, exist_ok=True)
     detector.start()
+    grace_worker.add_job(assign_waitlist)  # freed spaces go to the first driver in the queue
     grace_worker.start()         # auto-releases bookings after the 15-minute grace period
     yield
     # runs once when the server stops
@@ -57,6 +61,7 @@ app.include_router(reservation_router)
 app.include_router(auth_router)
 app.include_router(notification_router)
 app.include_router(penalty_router)
+app.include_router(waitlist_router)
 
 # endpoints that change the set-up need a logged-in operator (see auth.py)
 OPERATOR_ONLY = [Depends(require_operator)]
