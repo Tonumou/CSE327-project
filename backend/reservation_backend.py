@@ -22,7 +22,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 import database
+import penalties
 from auth import require_operator, require_user
+from notifications import notify
 
 router = APIRouter(prefix="/api/reservations", tags=["Reservations"])
 
@@ -201,13 +203,22 @@ def insert_reservation(cur, user_id, slot, driver_name, driver_email, license_pl
         license_plate.strip().upper(), now, end_time, duration_hours,
         total_price, grace_deadline, pin
     ))
+    res_id = cur.lastrowid
+
+    # unpaid no-show fees from earlier bookings are collected on this ticket
+    fees = penalties.collect_unpaid_fees(cur, user_id, res_id) if user_id is not None else 0.0
+    if fees:
+        total_price = round(total_price + fees, 2)
+        cur.execute("UPDATE reservations SET total_price = %s, fees_included = %s WHERE id = %s",
+                    (total_price, fees, res_id))
     return {
-        "id": cur.lastrowid,
+        "id": res_id,
         "reservation_code": res_code,
         "slot_id": slot["id"],
         "slot_code": slot["slot_code"],
         "checkin_pin": pin,
         "total_price": total_price,
+        "fees_included": fees,
         "grace_deadline": _iso(grace_deadline),
     }
 
@@ -284,6 +295,7 @@ def create_reservation(data: ReservationCreate, user=Depends(require_user)):
     conn = database.get_connection()
     try:
         with BOOKING_LOCK, conn.cursor() as cur:
+            penalties.check_can_book(cur, user["id"])  # paused after repeated no-shows
             if open_booking_of(cur, user["id"]):
                 raise HTTPException(400, "You already have a booking. Cancel or finish it before booking another space.")
 
@@ -356,6 +368,7 @@ def cancel_reservation(res_id: int, user=Depends(require_user)):
             # Free up the slot only if it is still held for this booking; if a car is
             # physically parked there the camera keeps it 'occupied'.
             release_slot(cur, res["slot_id"])
+            penalties.return_unpaid_fees(cur, res_id)  # old fees move to the next booking
     finally:
         conn.close()
     grace_worker.wake()  # the space may go to the next driver straight away
@@ -393,6 +406,11 @@ def expire_no_shows(cur):
         print(f"[GraceWorker] Reservation {res['reservation_code']} expired! Auto-releasing slot.")
         cur.execute("UPDATE reservations SET status = 'expired' WHERE id = %s AND status = 'pending'", (res["id"],))
         release_slot(cur, res["slot_id"])
+        penalties.return_unpaid_fees(cur, res["id"])
+        penalty_text = penalties.apply_no_show(cur, res)  # no-show fee (see penalties.py)
+        notify(cur, res["user_id"], "booking_expired", f"Booking {res['reservation_code']} expired",
+               f"You did not check in at space {res['slot_code']} within {GRACE_PERIOD_MINUTES} minutes, "
+               "so the space was given back." + penalty_text)
 
 
 def complete_finished_sessions(cur):
@@ -404,6 +422,9 @@ def complete_finished_sessions(cur):
         print(f"[GraceWorker] Reservation {res['reservation_code']} finished: the car has left {res['slot_code']}.")
         cur.execute("UPDATE reservations SET status = 'completed', checked_out_at = %s WHERE id = %s",
                     (now, res["id"]))
+        notify(cur, res["user_id"], "session_completed", f"Parking at {res['slot_code']} ended",
+               f"Your booked time is over and the camera saw your car leave {res['slot_code']}. "
+               "The session was checked out for you. Thank you!")
 
 
 # ---------- Background Dynamic Grace Period Auto-Release Worker ----------
