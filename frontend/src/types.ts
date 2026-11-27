@@ -84,6 +84,8 @@ export interface Reservation {
   penalty_fee: number; // no-show fee charged for this booking
   penalty_paid_by: number | null; // later booking that collected that fee
   fees_included: number; // old no-show fees added to this booking's total
+  charging_minutes: number | null; // Feature 4: EV chargers are booked by charging time
+  idle_fee: number; // Feature 4: fee for staying at the charger after charging
 }
 
 export interface NewReservation {
@@ -92,6 +94,7 @@ export interface NewReservation {
   driver_email: string;
   license_plate: string;
   duration_hours: number;
+  charging_minutes?: number; // EV chargers only
 }
 
 // returned once, to the driver who booked (contains the check-in PIN)
@@ -138,7 +141,41 @@ export interface NewWaitlistEntry {
   driver_email: string;
   license_plate: string;
   duration_hours: number;
+  charging_minutes?: number; // EV queue only
   wait_minutes: number;
+}
+
+// ---------- Feature 4: EV charging coordination ----------
+
+export type EvState = "free" | "occupied" | "reserved" | "charging" | "charged" | "idle";
+
+export interface EvCharger {
+  slot_id: number;
+  slot_code: string;
+  state: EvState; // charged = done, driver should move; idle = overstaying, fee running
+  started_at: string | null;
+  ends_at: string | null; // end of the charging time
+  free_at: string | null; // expected free (null = unknown / overdue)
+  idle_minutes: number;
+  idle_fee: number;
+  license_plate?: string; // operator only
+  driver_name?: string; // operator only
+}
+
+export interface EvRules {
+  rate_per_hour: number;
+  charge_options: number[]; // minutes
+  soon_minutes: number;
+  idle_grace_minutes: number;
+  idle_fee_per_minute: number;
+  idle_fee_cap: number;
+}
+
+export interface EvStatus {
+  chargers: EvCharger[];
+  next_free_at: string | null;
+  queue: number; // drivers on the EV waitlist
+  rules: EvRules;
 }
 
 export interface AppNotification {
