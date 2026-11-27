@@ -137,7 +137,7 @@ def charger_status(user=Depends(require_user)):
     for slot in chargers:
         res = bookings.get(slot["id"])
         item = {"slot_id": slot["id"], "slot_code": slot["slot_code"], "state": slot["status"],
-                "ends_at": None, "free_at": None, "idle_minutes": 0, "idle_fee": 0.0}
+                "started_at": None, "ends_at": None, "free_at": None, "idle_minutes": 0, "idle_fee": 0.0}
         if res is None:
             # no booking: free, or a car the camera sees without a booking (unknown)
             item["free_at"] = _iso(now) if slot["status"] == "free" else None
@@ -148,6 +148,7 @@ def charger_status(user=Depends(require_user)):
         else:
             stage = turnover_stage(res["end_time"], now)
             item["state"] = "charged" if stage == CHARGED else "idle" if stage == IDLE else "charging"
+            item["started_at"] = _iso(res["checked_in_at"])
             item["ends_at"] = _iso(res["end_time"])
             if stage == IDLE:
                 item["free_at"] = None  # overdue: the driver has not moved

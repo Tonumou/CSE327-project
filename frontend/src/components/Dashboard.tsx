@@ -5,6 +5,7 @@ import { getSlots, getStatus } from "../api";
 import { useAuth } from "../auth";
 import { Item, Reveal, Stagger, spring } from "../motion";
 import type { Slot, Status } from "../types";
+import EvChargersPanel, { useEvChargers } from "./EvChargers";
 import LiveFeed from "./LiveFeed";
 import OccupancyRing from "./OccupancyRing";
 import ParkingScene from "./ParkingScene";
@@ -47,6 +48,7 @@ export default function Dashboard({ onReserve }: { onReserve: () => void }) {
   const reserved = count("reserved");
   const occupied = count("occupied");
   const isOperator = user?.role === "operator";
+  const ev = useEvChargers(slots.some((s) => s.slot_type === "ev_charging"));
   const byName = [...slots].sort((a, b) => a.slot_code.localeCompare(b.slot_code, undefined, { numeric: true }));
   const loading = status === null && !offline; // first load: show grey placeholders
 
@@ -158,6 +160,13 @@ export default function Dashboard({ onReserve }: { onReserve: () => void }) {
       <Reveal>
         <SlotMap slots={slots} onReserve={onReserve} />
       </Reveal>
+
+      {/* Feature 4: charger turnover (only when the lot has EV chargers) */}
+      {ev && (
+        <Reveal>
+          <EvChargersPanel data={ev} isOperator={isOperator} />
+        </Reveal>
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import type {
   AppNotification,
   AuthResponse,
   BookingTicket,
+  EvStatus,
   Log,
   NewReservation,
   NewWaitlistEntry,
@@ -145,7 +146,11 @@ export const cancelReservation = (id: number) =>
 export const getMyReservations = () => request<Reservation[]>("/api/reservations/mine");
 
 export const checkoutReservation = (id: number) =>
-  request<{ message: string; status: string; total_price: number }>(`/api/reservations/${id}/checkout`, { method: "POST" });
+  request<{ message: string; status: string; total_price: number; idle_fee: number }>(`/api/reservations/${id}/checkout`, { method: "POST" });
+
+// ---------- Feature 4: EV chargers ----------
+
+export const getEvChargers = () => request<EvStatus>("/api/ev/chargers");
 
 export const getMyPenalties = () => request<PenaltyStatus>("/api/penalties/me");
 

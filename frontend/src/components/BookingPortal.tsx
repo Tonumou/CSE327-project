@@ -50,6 +50,7 @@ import { useAuth } from "../auth";
 import { CheckDraw, popIn, spring } from "../motion";
 import { useToast } from "../toast";
 import type { PenaltyStatus, Reservation, ReservationStatus, Slot, SlotType, WaitlistStatus } from "../types";
+import EvChargersPanel, { formatMinutes, freeHint, useEvChargers } from "./EvChargers";
 
 const GRACE_SECONDS = 15 * 60;
 
@@ -75,6 +76,8 @@ const withArticle = (word: string) => (/^[aeiouAEIOU]/.test(word) || word.starts
 
 const DURATIONS = [1, 2, 3, 4, 8];
 const WAIT_OPTIONS = [30, 60, 120];
+const CHARGE_OPTIONS = [30, 60, 90, 120, 180, 240]; // minutes (the backend sends the real list)
+const chargeLabel = (m: number) => (m < 60 ? `${m}m` : m % 60 ? `${Math.floor(m / 60)}½h` : `${m / 60}h`);
 
 const STATUS_PILL: Record<Slot["status"], string> = {
   free: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
@@ -97,7 +100,7 @@ const dayClock = (iso: string) =>
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 function typeInfo(slot: Slot) {
-  if (slot.slot_type === "ev_charging") return { label: "EV fast charger", icon: <Zap className="size-4" />, cls: "text-sky-600 bg-sky-50 dark:bg-sky-500/15 dark:text-sky-300" };
+  if (slot.slot_type === "ev_charging") return { label: "EV charger", icon: <Zap className="size-4" />, cls: "text-sky-600 bg-sky-50 dark:bg-sky-500/15 dark:text-sky-300" };
   if (slot.slot_type === "handicapped") return { label: "Accessible bay", icon: <Accessibility className="size-4" />, cls: "text-violet-600 bg-violet-50 dark:bg-violet-500/15 dark:text-violet-300" };
   return { label: "Standard bay", icon: <Car className="size-4" />, cls: "text-stone-600 bg-stone-100 dark:bg-stone-800 dark:text-stone-300" };
 }
@@ -180,6 +183,37 @@ function CountdownRing({ secondsLeft }: { secondsLeft: number }) {
   );
 }
 
+// Feature 4: ring that fills while an EV charges (blue), then turns violet
+// when it is full and red when the idle fee is running
+function ChargeRing({ percent, tone }: { percent: number; tone: "charging" | "charged" | "idle" }) {
+  const r = 34;
+  const c = 2 * Math.PI * r;
+  const color = tone === "charging" ? "#0ea5e9" : tone === "charged" ? "#8b5cf6" : "#f43f5e";
+  return (
+    <div className="relative size-24 shrink-0">
+      <svg viewBox="0 0 80 80" className="size-full -rotate-90">
+        <circle cx="40" cy="40" r={r} fill="none" strokeWidth="7" className="stroke-stone-100 dark:stroke-stone-800" />
+        <circle
+          cx="40"
+          cy="40"
+          r={r}
+          fill="none"
+          strokeWidth="7"
+          strokeLinecap="round"
+          stroke={color}
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - percent / 100)}
+          className="transition-all duration-1000 ease-linear"
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ color }}>
+        <Zap className={`size-5 ${tone === "charging" ? "animate-pulse" : ""}`} />
+        <span className="font-mono text-sm font-bold tabular-nums">{Math.round(percent)}%</span>
+      </div>
+    </div>
+  );
+}
+
 // pop-up window used by the booking and the waitlist forms
 function Dialog({ onClose, header, children }: { onClose: () => void; header: ReactNode; children: ReactNode }) {
   return (
@@ -240,6 +274,7 @@ export default function BookingPortal() {
   const [driverEmail, setDriverEmail] = useState(user?.email ?? "");
   const [licensePlate, setLicensePlate] = useState("");
   const [durationHours, setDurationHours] = useState(1);
+  const [chargeMinutes, setChargeMinutes] = useState(60); // EV chargers: charging time
   const [waitMinutes, setWaitMinutes] = useState(60);
   const [mine, setMine] = useState<Reservation[] | null>(null); // my bookings, newest first
   const [penalty, setPenalty] = useState<PenaltyStatus | null>(null);
@@ -310,27 +345,37 @@ export default function BookingPortal() {
     setEnteredPin("");
   }, [mine]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Grace Period countdown clock (the deadline itself comes from the server)
+  // Feature 4: charger states, rules and "free ~14:30" hints (only if the lot has chargers)
+  const hasChargers = (slots ?? []).some((s) => s.slot_type === "ev_charging");
+  const ev = useEvChargers(hasChargers);
+  const evRules = ev?.rules;
+  const chargeOptions = evRules?.charge_options ?? CHARGE_OPTIONS;
+
+  // Clock for the grace-period countdown and the EV charging progress
+  // (the deadlines themselves come from the server)
   const pending = activeReservation?.status === "pending";
+  const evSession = activeReservation?.status === "active" && activeReservation.slot_type === "ev_charging";
   useEffect(() => {
-    if (!pending) return;
+    if (!pending && !evSession) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [pending]);
+  }, [pending, evSession]);
 
   const handleBook = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedSlot || !driverName || !licensePlate) return;
     setBusy(true);
     setFormError("");
+    const isEv = selectedSlot.slot_type === "ev_charging";
     try {
       const ticket = await createReservation({
         slot_id: selectedSlot.id,
         driver_name: driverName,
         driver_email: driverEmail,
         license_plate: licensePlate,
-        duration_hours: durationHours,
+        duration_hours: isEv ? Math.ceil(chargeMinutes / 60) : durationHours,
+        ...(isEv ? { charging_minutes: chargeMinutes } : {}),
       });
       ownActions.current.add(ticket.id);
       notice(true, ticket.message);
@@ -385,13 +430,15 @@ export default function BookingPortal() {
     if (!waitType || !driverName || !licensePlate) return;
     setBusy(true);
     setFormError("");
+    const isEv = waitType === "ev_charging";
     try {
       const r = await joinWaitlist({
         slot_type: waitType,
         driver_name: driverName,
         driver_email: driverEmail,
         license_plate: licensePlate,
-        duration_hours: durationHours,
+        duration_hours: isEv ? Math.ceil(chargeMinutes / 60) : durationHours,
+        ...(isEv ? { charging_minutes: chargeMinutes } : {}),
         wait_minutes: waitMinutes,
       });
       // when a space was free it is booked at once and the ticket appears by itself
@@ -429,7 +476,58 @@ export default function BookingPortal() {
     ? Math.max(0, Math.floor((new Date(activeReservation.grace_deadline).getTime() - now) / 1000))
     : 0;
   const rate = selectedSlot?.hourly_rate || 2.5;
+  const selectedIsEv = selectedSlot?.slot_type === "ev_charging";
+  // EV chargers: paid per minute of charging time; other spaces per hour
+  const bookingCost = selectedIsEv ? (rate * chargeMinutes) / 60 : rate * durationHours;
   const unpaidFees = penalty?.unpaid_fees ?? 0;
+
+  // Feature 4: where my EV session is (charging -> fully charged -> idle fee running)
+  let charge: { percent: number; tone: "charging" | "charged" | "idle"; text: ReactNode } | null = null;
+  if (evSession && activeReservation) {
+    const end = new Date(activeReservation.end_time).getTime();
+    const start = activeReservation.checked_in_at ? new Date(activeReservation.checked_in_at).getTime() : end;
+    const grace = (evRules?.idle_grace_minutes ?? 10) * 60000;
+    if (now < end) {
+      charge = {
+        percent: end > start ? Math.min(100, ((now - start) / (end - start)) * 100) : 0,
+        tone: "charging",
+        text: (
+          <>
+            <b>Charging</b> · {formatMinutes(Math.ceil((end - now) / 60000))} left · done at {clock(activeReservation.end_time)}. Please move your
+            car then, so the next EV driver can charge.
+          </>
+        ),
+      };
+    } else if (now < end + grace) {
+      const left = Math.ceil((end + grace - now) / 1000);
+      charge = {
+        percent: 100,
+        tone: "charged",
+        text: (
+          <>
+            <b>Fully charged!</b> Please move your car within{" "}
+            <b className="font-mono">
+              {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}
+            </b>{" "}
+            to avoid the idle fee of {money(evRules?.idle_fee_per_minute ?? 0.5)}/min.
+          </>
+        ),
+      };
+    } else {
+      const idleMin = Math.ceil((now - end - grace) / 60000);
+      const fee = Math.min(evRules?.idle_fee_cap ?? 30, idleMin * (evRules?.idle_fee_per_minute ?? 0.5));
+      charge = {
+        percent: 100,
+        tone: "idle",
+        text: (
+          <>
+            <b>Idle fee running: {money(fee)}</b> ({formatMinutes(idleMin)} after charging). Your car is blocking the charger, please check out as
+            soon as you leave.
+          </>
+        ),
+      };
+    }
+  }
   const blockedUntil = penalty?.blocked_until ?? null;
   const rules = penalty?.rules;
   const waiting = waitlist?.entry ?? null;
@@ -549,15 +647,24 @@ export default function BookingPortal() {
                     <dd className="font-mono text-lg font-bold tracking-[0.3em] text-brand-600 dark:text-brand-400">{activeReservation.checkin_pin}</dd>
                   </div>
                 )}
-                {!pending && (
+                {activeReservation.charging_minutes ? (
                   <div>
-                    <dt className="text-xs text-stone-500">Booked until</dt>
-                    <dd className="font-semibold">{clock(activeReservation.end_time)}</dd>
+                    <dt className="text-xs text-stone-500">Charging time</dt>
+                    <dd className="font-semibold">{formatMinutes(activeReservation.charging_minutes)}</dd>
                   </div>
+                ) : (
+                  !pending && (
+                    <div>
+                      <dt className="text-xs text-stone-500">Booked until</dt>
+                      <dd className="font-semibold">{clock(activeReservation.end_time)}</dd>
+                    </div>
+                  )
                 )}
               </dl>
               {pending ? (
                 <CountdownRing secondsLeft={graceSecondsLeft} />
+              ) : charge ? (
+                <ChargeRing percent={charge.percent} tone={charge.tone} />
               ) : (
                 <div className="flex size-24 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
                   <CheckDraw size={56} />
@@ -582,9 +689,23 @@ export default function BookingPortal() {
               </div>
             ) : (
               <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-stone-100 pt-5 dark:border-stone-800">
+                {charge && (
+                  <p
+                    className={`w-full rounded-lg px-3.5 py-2.5 text-sm ${
+                      charge.tone === "charging"
+                        ? "bg-sky-50 text-sky-800 dark:bg-sky-500/10 dark:text-sky-300"
+                        : charge.tone === "charged"
+                          ? "bg-violet-50 text-violet-800 dark:bg-violet-500/10 dark:text-violet-300"
+                          : "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"
+                    }`}
+                  >
+                    {charge.text}
+                  </p>
+                )}
                 <p className="text-sm text-stone-500 dark:text-stone-400">
-                  Leaving? Check out to free the space for the next driver. When your time is over and the camera sees the space empty, we check you out
-                  automatically.
+                  {charge
+                    ? "Leaving? Check out to free the charger for the next EV driver."
+                    : "Leaving? Check out to free the space for the next driver. When your time is over and the camera sees the space empty, we check you out automatically."}
                 </p>
                 <button onClick={handleCheckout} className="btn-ghost ml-auto !py-3">
                   <LogOut className="size-4" /> Leave & check out
@@ -684,6 +805,9 @@ export default function BookingPortal() {
         )}
       </AnimatePresence>
 
+      {/* ---------- Feature 4: EV charger turnover ---------- */}
+      {filterType === "ev" && ev && <EvChargersPanel data={ev} isOperator={user?.role === "operator"} />}
+
       {/* ---------- slot cards ---------- */}
       {slots === null && !offline ? (
         // first load: grey placeholders instead of "no spaces"
@@ -722,16 +846,18 @@ export default function BookingPortal() {
                 <div className="flex items-start justify-between">
                   <div>
                     <p className="text-2xl font-extrabold tracking-tight">{slot.slot_code}</p>
-                    <span className={`chip mt-1 !px-2 ${t.cls}`}>
+                    <span className={`chip mt-1 !px-2 whitespace-nowrap ${t.cls}`}>
                       {t.icon} {t.label}
                     </span>
                   </div>
                   <span className={`chip uppercase ${STATUS_PILL[slot.status]}`}>{slot.status}</span>
                 </div>
                 <div className="mt-4 flex items-end justify-between border-t border-stone-100 pt-3 dark:border-stone-800">
-                  <p>
+                  <p className="whitespace-nowrap">
                     <span className="text-xl font-bold">{money(slot.hourly_rate || 2.5)}</span>
-                    <span className="text-xs text-stone-500"> / hour</span>
+                    <span className="text-xs text-stone-500">
+                      {slot.slot_type !== "ev_charging" ? " / hour" : isFree ? " / h charging" : " / h"}
+                    </span>
                   </p>
                   {isFree ? (
                     <button
@@ -746,7 +872,9 @@ export default function BookingPortal() {
                       Reserve
                     </button>
                   ) : (
-                    <span className="text-xs font-medium text-stone-400">Unavailable</span>
+                    <span className="text-xs font-medium whitespace-nowrap text-stone-400">
+                      {(slot.slot_type === "ev_charging" && freeHint(ev, slot.id)) || "Unavailable"}
+                    </span>
                   )}
                 </div>
               </motion.div>
@@ -785,6 +913,9 @@ export default function BookingPortal() {
                     </td>
                     <td className="px-5 py-3 text-right whitespace-nowrap">
                       {r.status === "completed" && money(r.total_price)}
+                      {r.status === "completed" && r.idle_fee > 0 && (
+                        <span className="block text-xs text-rose-600 dark:text-rose-400">incl. {money(r.idle_fee)} idle fee</span>
+                      )}
                       {r.status === "cancelled" && <span className="text-stone-400">free</span>}
                       {r.status === "expired" && (
                         <span className="text-rose-600 dark:text-rose-400">
@@ -821,17 +952,26 @@ export default function BookingPortal() {
             <form onSubmit={handleBook} className="space-y-4 p-5">
               {driverFields}
 
-              <div>
-                <p className="mb-1.5 text-sm font-medium">How long will you stay?</p>
-                <Choice options={DURATIONS} value={durationHours} onChange={setDurationHours} label={durationLabel} />
-              </div>
+              {selectedIsEv ? (
+                <div>
+                  <p className="mb-1.5 text-sm font-medium">How long do you need to charge?</p>
+                  <Choice options={chargeOptions} value={chargeMinutes} onChange={setChargeMinutes} label={chargeLabel} />
+                </div>
+              ) : (
+                <div>
+                  <p className="mb-1.5 text-sm font-medium">How long will you stay?</p>
+                  <Choice options={DURATIONS} value={durationHours} onChange={setDurationHours} label={durationLabel} />
+                </div>
+              )}
 
               <div className="space-y-1.5 rounded-xl bg-stone-50 p-4 text-sm dark:bg-stone-800/60">
                 <div className="flex justify-between text-stone-600 dark:text-stone-300">
                   <span>
-                    {money(rate)} × {plural(durationHours, "hour")}
+                    {selectedIsEv
+                      ? `${money(rate)}/h × ${formatMinutes(chargeMinutes)} charging`
+                      : `${money(rate)} × ${plural(durationHours, "hour")}`}
                   </span>
-                  <span>{money(rate * durationHours)}</span>
+                  <span>{money(bookingCost)}</span>
                 </div>
                 {unpaidFees > 0 && (
                   <div className="flex justify-between text-rose-600 dark:text-rose-400">
@@ -845,8 +985,17 @@ export default function BookingPortal() {
                 </div>
                 <div className="flex justify-between border-t border-stone-200 pt-2 text-base font-bold dark:border-stone-700">
                   <span>Total</span>
-                  <span className="text-emerald-600 dark:text-emerald-400">{money(rate * durationHours + unpaidFees)}</span>
+                  <span className="text-emerald-600 dark:text-emerald-400">{money(bookingCost + unpaidFees)}</span>
                 </div>
+                {selectedIsEv && (
+                  <p className="flex gap-1.5 pt-1 text-xs text-sky-700 dark:text-sky-300">
+                    <Zap className="mt-0.5 size-3.5 shrink-0" />
+                    <span>
+                      Charging starts when you check in. When it is done you have {evRules?.idle_grace_minutes ?? 10} minutes to move; after that an idle
+                      fee of {money(evRules?.idle_fee_per_minute ?? 0.5)}/min applies (max {money(evRules?.idle_fee_cap ?? 30)}).
+                    </span>
+                  </p>
+                )}
                 <p className="pt-1 text-xs text-stone-500 dark:text-stone-400">
                   Free cancellation until you check in. If you do not arrive within 15 minutes, a no-show fee of{" "}
                   {money(rate * (rules?.fee_hours ?? 1))} is added to your next booking.
@@ -900,10 +1049,22 @@ export default function BookingPortal() {
                 </div>
               )}
               {driverFields}
-              <div>
-                <p className="mb-1.5 text-sm font-medium">How long will you stay?</p>
-                <Choice options={DURATIONS} value={durationHours} onChange={setDurationHours} label={durationLabel} />
-              </div>
+              {waitType === "ev_charging" ? (
+                <div>
+                  <p className="mb-1.5 text-sm font-medium">How long do you need to charge?</p>
+                  <Choice options={chargeOptions} value={chargeMinutes} onChange={setChargeMinutes} label={chargeLabel} />
+                </div>
+              ) : (
+                <div>
+                  <p className="mb-1.5 text-sm font-medium">How long will you stay?</p>
+                  <Choice options={DURATIONS} value={durationHours} onChange={setDurationHours} label={durationLabel} />
+                </div>
+              )}
+              {waitType === "ev_charging" && ev?.next_free_at && (
+                <p className="flex items-center gap-1.5 text-xs text-sky-700 dark:text-sky-300">
+                  <Zap className="size-3.5" /> The next charger should be free around {clock(ev.next_free_at)}.
+                </p>
+              )}
               <div>
                 <p className="mb-1.5 text-sm font-medium">How long can you wait?</p>
                 <Choice options={WAIT_OPTIONS} value={waitMinutes} onChange={setWaitMinutes} label={(m) => (m < 60 ? `${m} min` : `${m / 60} h`)} />
