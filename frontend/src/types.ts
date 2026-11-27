@@ -50,11 +50,19 @@ export interface User {
   full_name: string;
   email: string;
   role: Role; // the first registered account is the operator (admin)
+  has_password?: boolean; // false = made with Google and no password set yet
+  google?: boolean; // a Google account is linked (Feature 5)
 }
 
 export interface AuthResponse {
   token: string;
   user: User;
+}
+
+// Feature 5: is "Continue with Google" set up on the server?
+export interface GoogleConfig {
+  enabled: boolean;
+  client_id: string;
 }
 
 // ---------- Feature 3: reservations (Tamanna Akter Mou) ----------

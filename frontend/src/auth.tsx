@@ -1,13 +1,14 @@
 // Login state shared by the whole website: who is logged in, log in / register / log out
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { getMe, getToken, loginUser, logoutUser, registerUser, setToken } from "./api";
+import { getMe, getToken, googleLogin, loginUser, logoutUser, registerUser, setToken } from "./api";
 import type { User } from "./types";
 
 interface AuthState {
   user: User | null;
   checking: boolean; // true while a saved login is being verified on page load
   login: (email: string, password: string) => Promise<void>;
+  loginWithGoogle: (credential: string) => Promise<boolean>; // true = a new account was made
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (u: User) => void; // after editing the profile
@@ -34,6 +35,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(r.user);
   };
 
+  // Feature 5: the backend checks Google's ID token and returns our own login token
+  const loginWithGoogle = async (credential: string) => {
+    const r = await googleLogin(credential);
+    setToken(r.token);
+    setUser(r.user);
+    return r.created;
+  };
+
   const register = async (name: string, email: string, password: string) => {
     const r = await registerUser(name, email, password);
     setToken(r.token);
@@ -47,7 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, checking, login, register, logout, updateUser: setUser }}>
+    <AuthContext.Provider value={{ user, checking, login, loginWithGoogle, register, logout, updateUser: setUser }}>
       {children}
     </AuthContext.Provider>
   );
