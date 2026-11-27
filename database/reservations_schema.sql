@@ -5,7 +5,7 @@
 --
 --  The backend creates all of this by itself when it starts
 --  (auth.py, reservation_backend.py, notifications.py,
---  penalties.py, waitlist.py). Import this file only if you want
+--  penalties.py, waitlist.py, ev_charging.py). Import this file only if you want
 --  to create the tables by hand, AFTER smart_parking.sql.
 --  It can be imported again without errors.
 -- ============================================================
@@ -53,10 +53,13 @@ CREATE TABLE IF NOT EXISTS reservations (
   start_time          DATETIME     NOT NULL,
   end_time            DATETIME     NOT NULL,  -- moved to check-in time + duration
   duration_hours      INT          NOT NULL DEFAULT 1,
+  charging_minutes    INT          NULL,      -- Feature 4: EV booked by charging time
   total_price         DECIMAL(6,2) NOT NULL DEFAULT 0.00,
   penalty_fee         DECIMAL(6,2) NOT NULL DEFAULT 0.00,  -- no-show fee for this booking
   penalty_paid_by     INT          NULL,      -- later booking whose ticket collected it
   fees_included       DECIMAL(6,2) NOT NULL DEFAULT 0.00,  -- old fees added to this total
+  idle_fee            DECIMAL(6,2) NOT NULL DEFAULT 0.00,  -- Feature 4: EV stayed after charging
+  turnover_stage      TINYINT      NOT NULL DEFAULT 0,     -- Feature 4: 0 charging, 1 ending soon, 2 charged, 3 idle
   status              ENUM('pending', 'active', 'completed', 'cancelled', 'expired') NOT NULL DEFAULT 'pending',
   grace_deadline      DATETIME     NOT NULL,
   checkin_pin         VARCHAR(6)   NOT NULL,
@@ -74,7 +77,10 @@ ALTER TABLE reservations
   ADD COLUMN IF NOT EXISTS penalty_fee     DECIMAL(6,2) NOT NULL DEFAULT 0.00 AFTER total_price,
   ADD COLUMN IF NOT EXISTS penalty_paid_by INT          NULL AFTER penalty_fee,
   ADD COLUMN IF NOT EXISTS fees_included   DECIMAL(6,2) NOT NULL DEFAULT 0.00 AFTER penalty_paid_by,
-  ADD COLUMN IF NOT EXISTS checked_out_at  DATETIME     NULL AFTER checked_in_at;
+  ADD COLUMN IF NOT EXISTS checked_out_at  DATETIME     NULL AFTER checked_in_at,
+  ADD COLUMN IF NOT EXISTS charging_minutes INT         NULL AFTER duration_hours,
+  ADD COLUMN IF NOT EXISTS idle_fee        DECIMAL(6,2) NOT NULL DEFAULT 0.00 AFTER fees_included,
+  ADD COLUMN IF NOT EXISTS turnover_stage  TINYINT      NOT NULL DEFAULT 0 AFTER idle_fee;
 
 -- Index for fast lookup of pending/active bookings
 -- (IF NOT EXISTS so the file can be imported again without errors)
@@ -94,6 +100,7 @@ CREATE TABLE IF NOT EXISTS waitlist (
   license_plate   VARCHAR(30)  NOT NULL,
   slot_type       ENUM('standard', 'ev_charging', 'handicapped') NOT NULL DEFAULT 'standard',
   duration_hours  INT          NOT NULL DEFAULT 1,
+  charging_minutes INT         NULL,      -- EV queue: charging time wanted
   status          ENUM('waiting', 'assigned', 'left', 'timed_out') NOT NULL DEFAULT 'waiting',
   reservation_id  INT          NULL,      -- the booking made for this driver
   created_at      DATETIME     NOT NULL,
@@ -102,6 +109,9 @@ CREATE TABLE IF NOT EXISTS waitlist (
   INDEX idx_waitlist_queue (status, slot_type, created_at),
   CONSTRAINT fk_waitlist_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+ALTER TABLE waitlist
+  ADD COLUMN IF NOT EXISTS charging_minutes INT NULL AFTER duration_hours;
 
 -- ------------------------------------------------------------
 -- 5. Table: notifications (messages under the bell - notifications.py)
