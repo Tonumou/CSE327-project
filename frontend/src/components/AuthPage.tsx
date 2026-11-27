@@ -19,6 +19,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useAuth } from "../auth";
 import { spring } from "../motion";
 import Car, { carColor } from "./Car";
+import GoogleButton from "./GoogleButton";
 import Logo from "./Logo";
 import { useTheme } from "../theme";
 import { useToast } from "../toast";
@@ -105,7 +106,7 @@ function LotAnimation() {
 }
 
 export default function AuthPage() {
-  const { login, register } = useAuth();
+  const { login, loginWithGoogle, register } = useAuth();
   const toast = useToast();
   const { dark, toggle } = useTheme();
   const [mode, setMode] = useState<Mode>("login");
@@ -141,6 +142,21 @@ export default function AuthPage() {
         await register(name, email, password);
         toast("success", "Account created - welcome to Smart Parking!");
       }
+    } catch (err) {
+      const msg = (err as Error).message;
+      setError(msg === "Failed to fetch" ? "Cannot reach the backend at http://localhost:8000 - is it running?" : msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Feature 5: Google picked an account and gave us its signed ID token
+  const googleSignIn = async (credential: string) => {
+    setError("");
+    setBusy(true);
+    try {
+      const created = await loginWithGoogle(credential);
+      toast("success", created ? "Account created with Google - welcome to Smart Parking!" : "Signed in with Google. Welcome back!");
     } catch (err) {
       const msg = (err as Error).message;
       setError(msg === "Failed to fetch" ? "Cannot reach the backend at http://localhost:8000 - is it running?" : msg);
@@ -368,6 +384,14 @@ export default function AuthPage() {
               )}
             </button>
           </form>
+
+          {/* Feature 5: federated identity */}
+          <div className="my-5 flex items-center gap-3 text-xs text-stone-400">
+            <span className="h-px flex-1 bg-stone-200 dark:bg-stone-800" />
+            or
+            <span className="h-px flex-1 bg-stone-200 dark:bg-stone-800" />
+          </div>
+          <GoogleButton onCredential={googleSignIn} dark={dark} />
 
           <p className="mt-6 text-center text-sm text-stone-500">
             {mode === "login" ? "New here? " : "Already have an account? "}
