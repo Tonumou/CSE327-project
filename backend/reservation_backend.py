@@ -223,6 +223,13 @@ def insert_reservation(cur, user_id, slot, driver_name, driver_email, license_pl
     }
 
 
+def drivers_waiting_for(cur, slot_type, except_user_id):
+    """Other drivers in the waitlist queue for this type of space (see waitlist.py)."""
+    cur.execute("SELECT COUNT(*) AS n FROM waitlist WHERE status = 'waiting' AND slot_type = %s AND user_id <> %s",
+                (slot_type, except_user_id))
+    return cur.fetchone()["n"]
+
+
 def _load_owned(cur, res_id, user):
     """A reservation the logged-in user may act on: their own (the operator may act on any)."""
     cur.execute(RESERVATION_SELECT + " WHERE r.id = %s", (res_id,))
@@ -304,6 +311,13 @@ def create_reservation(data: ReservationCreate, user=Depends(require_user)):
             if not slot:
                 raise HTTPException(404, "Selected parking slot does not exist")
 
+            # drivers on the waitlist get the next free space of their type first
+            waiting = drivers_waiting_for(cur, slot["slot_type"], user["id"])
+            if waiting:
+                grace_worker.wake()  # hand the space to the queue now
+                raise HTTPException(409, f"{waiting} driver(s) on the waitlist are first in line for this kind "
+                                         "of space. Join the waitlist to get the next one.")
+
             # Update slot status to reserved (only if nobody else holds it)
             if not claim_slot(cur, slot["id"]):
                 raise HTTPException(400, f"Slot {slot['slot_code']} is not free any more")
@@ -313,6 +327,8 @@ def create_reservation(data: ReservationCreate, user=Depends(require_user)):
             except Exception:
                 release_slot(cur, slot["id"])
                 raise
+            # booking directly takes the driver off the waitlist
+            cur.execute("UPDATE waitlist SET status = 'left' WHERE user_id = %s AND status = 'waiting'", (user["id"],))
     finally:
         conn.close()
 
