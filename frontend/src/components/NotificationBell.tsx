@@ -1,12 +1,13 @@
-// Bell in the top bar: a live feed of slot changes ("P4 is now free")
+// Bell in the top bar: personal messages from the server ("Space P4 is booked
+// for you", "Your booking expired") and a live feed of slot changes ("P4 is now free")
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Bell, BellOff, CalendarCheck, Car, CheckCheck, CircleParking } from "lucide-react";
+import { BadgeCheck, Bell, BellOff, CalendarCheck, Car, CheckCheck, CircleParking, Hourglass, TimerOff, Zap } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { getSlots } from "../api";
+import { getNotifications, getSlots, markNotificationsRead } from "../api";
 import { popIn } from "../motion";
 import { usePrefs } from "../prefs";
-import type { Slot } from "../types";
+import type { AppNotification, Slot } from "../types";
 
 interface SlotEvent {
   id: number;
@@ -21,9 +22,18 @@ const LOOK: Record<Slot["status"], { icon: ReactNode; text: string; cls: string 
   occupied: { icon: <Car className="size-4" />, text: "is now occupied", cls: "bg-rose-50 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400" },
 };
 
+// icon + colour for each kind of personal message
+function kindLook(kind: string): { icon: ReactNode; cls: string } {
+  if (kind === "waitlist_assigned") return { icon: <CalendarCheck className="size-4" />, cls: "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400" };
+  if (kind === "booking_expired") return { icon: <TimerOff className="size-4" />, cls: "bg-rose-50 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400" };
+  if (kind === "waitlist_timeout") return { icon: <Hourglass className="size-4" />, cls: "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300" };
+  if (kind.startsWith("ev_")) return { icon: <Zap className="size-4" />, cls: "bg-sky-50 text-sky-600 dark:bg-sky-500/15 dark:text-sky-400" };
+  return { icon: <BadgeCheck className="size-4" />, cls: "bg-brand-50 text-brand-600 dark:bg-brand-500/15 dark:text-brand-400" };
+}
+
 const ago = (t: number) => {
   const s = Math.round((Date.now() - t) / 1000);
-  return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)} min ago` : `${Math.floor(s / 3600)} h ago`;
+  return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : `${Math.floor(s / 86400)} d ago`;
 };
 
 let nextId = 1;
@@ -31,10 +41,13 @@ let nextId = 1;
 export default function NotificationBell() {
   const { prefs } = usePrefs();
   const [events, setEvents] = useState<SlotEvent[]>([]);
-  const [seen, setSeen] = useState(0); // id of the newest event already looked at
+  const [personal, setPersonal] = useState<AppNotification[]>([]);
+  const [fresh, setFresh] = useState<Set<number>>(new Set()); // unread when the menu was opened
+  const [seen, setSeen] = useState(0); // id of the newest slot event already looked at
   const [open, setOpen] = useState(false);
   const [, tick] = useState(0); // re-render so "2 min ago" stays right
   const last = useRef<Map<number, Slot["status"]> | null>(null);
+  const newestPersonal = useRef<number | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const notifyRef = useRef(prefs.notifyFree);
   notifyRef.current = prefs.notifyFree;
@@ -72,6 +85,28 @@ export default function NotificationBell() {
     };
   }, []);
 
+  // personal messages for the logged-in account, every 5 seconds
+  useEffect(() => {
+    const load = async () => {
+      let list: AppNotification[];
+      try {
+        list = await getNotifications();
+      } catch {
+        return;
+      }
+      const newest = newestPersonal.current;
+      // a desktop pop-up for messages that arrived since the last check (if allowed in Settings)
+      if (newest !== null && "Notification" in window && Notification.permission === "granted") {
+        list.filter((n) => n.id > newest && !n.is_read).forEach((n) => new Notification(n.title, { body: n.message }));
+      }
+      newestPersonal.current = list.length ? list[0].id : (newest ?? 0);
+      setPersonal(list);
+    };
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, []);
+
   useEffect(() => {
     const close = (e: MouseEvent) => {
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
@@ -80,15 +115,24 @@ export default function NotificationBell() {
     return () => document.removeEventListener("mousedown", close);
   }, []);
 
-  const unread = events.filter((e) => e.id > seen).length;
+  const unreadPersonal = personal.filter((n) => !n.is_read);
+  const unread = events.filter((e) => e.id > seen).length + unreadPersonal.length;
+
   const openMenu = () => {
-    setOpen((o) => !o);
+    const opening = !open;
+    setOpen(opening);
     if (events.length) setSeen(events[0].id);
+    if (opening && unreadPersonal.length) {
+      // keep them highlighted while the menu is open, but mark them read on the server
+      setFresh(new Set(unreadPersonal.map((n) => n.id)));
+      setPersonal((list) => list.map((n) => ({ ...n, is_read: true })));
+      markNotificationsRead().catch(() => {});
+    }
   };
 
   return (
     <div className="relative" ref={boxRef}>
-      <button onClick={openMenu} className="btn-ghost relative !p-2.5" aria-label="Notifications" title="Slot changes">
+      <button onClick={openMenu} className="btn-ghost relative !p-2.5" aria-label="Notifications" title="Notifications">
         <Bell className={`size-4 ${unread ? "animate-wiggle" : ""}`} />
         {unread > 0 && (
           <span className="absolute -top-1 -right-1 flex h-5 min-w-5 animate-pop items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white ring-2 ring-white dark:ring-stone-900">
@@ -105,39 +149,70 @@ export default function NotificationBell() {
           animate="show"
           exit="exit"
           style={{ transformOrigin: "top right" }}
-          className="card absolute right-0 z-50 mt-2 w-80 overflow-hidden shadow-xl max-sm:fixed max-sm:inset-x-3 max-sm:w-auto"
+          className="card absolute right-0 z-50 mt-2 w-96 overflow-hidden shadow-xl max-sm:fixed max-sm:inset-x-3 max-sm:w-auto"
         >
-          <div className="flex items-center justify-between border-b border-stone-100 px-4 py-3 dark:border-stone-800">
-            <p className="font-semibold">Slot changes</p>
-            {events.length > 0 && (
-              <button onClick={() => setEvents([])} className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline dark:text-brand-400">
-                <CheckCheck className="size-3.5" /> Clear
-              </button>
+          <div className="max-h-[28rem] overflow-y-auto">
+            {personal.length > 0 && (
+              <>
+                <p className="border-b border-stone-100 px-4 py-3 font-semibold dark:border-stone-800">For you</p>
+                <ul>
+                  {personal.slice(0, 10).map((n, i) => {
+                    const look = kindLook(n.kind);
+                    return (
+                      <motion.li
+                        key={n.id}
+                        initial={{ opacity: 0, x: 12 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: Math.min(i, 8) * 0.03 }}
+                        className={`flex gap-3 px-4 py-3 ${fresh.has(n.id) ? "bg-brand-50/60 dark:bg-brand-500/10" : ""}`}
+                      >
+                        <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${look.cls}`}>{look.icon}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="flex items-start justify-between gap-2 text-sm font-semibold">
+                            {n.title}
+                            <span className="shrink-0 text-xs font-normal whitespace-nowrap text-stone-400">{ago(new Date(n.created_at).getTime())}</span>
+                          </p>
+                          <p className="text-xs text-stone-600 dark:text-stone-400">{n.message}</p>
+                        </div>
+                      </motion.li>
+                    );
+                  })}
+                </ul>
+              </>
             )}
+
+            <div className="flex items-center justify-between border-y border-stone-100 px-4 py-3 dark:border-stone-800">
+              <p className="font-semibold">Slot changes</p>
+              {events.length > 0 && (
+                <button onClick={() => setEvents([])} className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline dark:text-brand-400">
+                  <CheckCheck className="size-3.5" /> Clear
+                </button>
+              )}
+            </div>
+            <ul>
+              {events.map((e, i) => (
+                <motion.li
+                  key={e.id}
+                  initial={{ opacity: 0, x: 12 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: Math.min(i, 8) * 0.03 }}
+                  className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-stone-50 dark:hover:bg-stone-800/50"
+                >
+                  <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${LOOK[e.status].cls}`}>{LOOK[e.status].icon}</span>
+                  <p className="flex-1 text-sm">
+                    Slot <b>{e.code}</b> {LOOK[e.status].text}
+                  </p>
+                  <span className="text-xs whitespace-nowrap text-stone-400">{ago(e.at)}</span>
+                </motion.li>
+              ))}
+              {events.length === 0 && (
+                <li className="flex flex-col items-center gap-2 px-4 py-10 text-center text-sm text-stone-500">
+                  <BellOff className="size-8 opacity-40" />
+                  No changes yet. When a space becomes free, reserved or occupied it shows up here.
+                </li>
+              )}
+            </ul>
           </div>
-          <ul className="max-h-96 overflow-y-auto">
-            {events.map((e, i) => (
-              <motion.li
-                key={e.id}
-                initial={{ opacity: 0, x: 12 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: Math.min(i, 8) * 0.03 }}
-                className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-stone-50 dark:hover:bg-stone-800/50"
-              >
-                <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${LOOK[e.status].cls}`}>{LOOK[e.status].icon}</span>
-                <p className="flex-1 text-sm">
-                  Slot <b>{e.code}</b> {LOOK[e.status].text}
-                </p>
-                <span className="text-xs whitespace-nowrap text-stone-400">{ago(e.at)}</span>
-              </motion.li>
-            ))}
-            {events.length === 0 && (
-              <li className="flex flex-col items-center gap-2 px-4 py-10 text-center text-sm text-stone-500">
-                <BellOff className="size-8 opacity-40" />
-                No changes yet. When a space becomes free, reserved or occupied it shows up here.
-              </li>
-            )}
-          </ul>
         </motion.div>
       )}
       </AnimatePresence>

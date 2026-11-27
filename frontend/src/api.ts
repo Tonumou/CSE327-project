@@ -1,14 +1,18 @@
 // All calls to the FastAPI backend live in this file
 import type {
+  AppNotification,
   AuthResponse,
   BookingTicket,
   Log,
   NewReservation,
+  NewWaitlistEntry,
+  PenaltyStatus,
   Reservation,
   Slot,
   SlotType,
   Status,
   User,
+  WaitlistStatus,
 } from "./types";
 
 export const API_URL = "http://localhost:8000";
@@ -136,6 +140,25 @@ export const checkinReservation = (id: number, checkin_pin: string) =>
 
 export const cancelReservation = (id: number) =>
   request<{ message: string; status: string }>(`/api/reservations/${id}/cancel`, { method: "POST" });
+
+// the logged-in driver's own bookings (open ones include the check-in PIN)
+export const getMyReservations = () => request<Reservation[]>("/api/reservations/mine");
+
+export const checkoutReservation = (id: number) =>
+  request<{ message: string; status: string; total_price: number }>(`/api/reservations/${id}/checkout`, { method: "POST" });
+
+export const getMyPenalties = () => request<PenaltyStatus>("/api/penalties/me");
+
+export const getMyWaitlist = () => request<WaitlistStatus>("/api/waitlist/me");
+
+export const joinWaitlist = (data: NewWaitlistEntry) =>
+  request<WaitlistStatus & { message: string }>("/api/waitlist", json(data));
+
+export const leaveWaitlist = () => request<{ message: string }>("/api/waitlist/leave", { method: "POST" });
+
+export const getNotifications = () => request<AppNotification[]>("/api/notifications");
+
+export const markNotificationsRead = () => request("/api/notifications/read", { method: "POST" });
 
 export const setSlotType = (slotId: number, slot_type: SlotType) =>
   request(`/api/reservations/slots/${slotId}/type`, {

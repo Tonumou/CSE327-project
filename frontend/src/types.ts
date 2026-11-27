@@ -76,8 +76,14 @@ export interface Reservation {
   status: ReservationStatus;
   grace_deadline: string;
   checked_in_at: string | null;
+  checked_out_at: string | null;
   slot_type: SlotType;
   hourly_rate: number;
+  user_id: number | null;
+  checkin_pin?: string; // only in /mine, only while the booking is open
+  penalty_fee: number; // no-show fee charged for this booking
+  penalty_paid_by: number | null; // later booking that collected that fee
+  fees_included: number; // old no-show fees added to this booking's total
 }
 
 export interface NewReservation {
@@ -92,9 +98,54 @@ export interface NewReservation {
 export interface BookingTicket {
   id: number;
   reservation_code: string;
+  slot_id: number;
   slot_code: string;
   checkin_pin: string;
   total_price: number;
+  fees_included: number;
   grace_deadline: string;
   message: string;
+}
+
+// ---------- Feature 3: no-show penalties, waitlist, notifications ----------
+
+export interface PenaltyStatus {
+  no_shows: number; // in the last rules.window_days days
+  unpaid_fees: number; // added to the next booking
+  blocked_until: string | null; // booking paused until then
+  rules: { fee_hours: number; limit: number; window_days: number; block_hours: number };
+}
+
+export interface WaitlistEntry {
+  id: number;
+  slot_type: SlotType;
+  license_plate: string;
+  duration_hours: number;
+  status: "waiting" | "assigned" | "left" | "timed_out";
+  created_at: string;
+  expires_at: string;
+}
+
+export interface WaitlistStatus {
+  entry: WaitlistEntry | null; // null = not waiting
+  position: number | null; // 1 = next in line
+  queue: Record<SlotType, number>; // drivers waiting per type
+}
+
+export interface NewWaitlistEntry {
+  slot_type: SlotType;
+  driver_name: string;
+  driver_email: string;
+  license_plate: string;
+  duration_hours: number;
+  wait_minutes: number;
+}
+
+export interface AppNotification {
+  id: number;
+  kind: string; // booking_expired, waitlist_assigned, waitlist_timeout, session_completed, ...
+  title: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
 }
