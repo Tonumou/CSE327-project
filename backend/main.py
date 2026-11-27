@@ -19,6 +19,10 @@ import database
 from auth import ensure_auth_tables, require_operator
 from auth import router as auth_router
 from detector import detector
+from notifications import ensure_notification_table
+from notifications import router as notification_router
+from penalties import ensure_penalty_columns
+from penalties import router as penalty_router
 from reservation_backend import ensure_reservation_tables, grace_worker
 from reservation_backend import router as reservation_router
 
@@ -29,6 +33,8 @@ async def lifespan(app: FastAPI):
     database.init_database()
     ensure_auth_tables()         # user accounts: login / registration (bookings belong to one)
     ensure_reservation_tables()  # Feature 3 (Mou): reservations table + slot type/tariff
+    ensure_notification_table()  # personal messages shown under the bell
+    ensure_penalty_columns()     # Feature 3: no-show fees
     os.makedirs(config.UPLOAD_DIR, exist_ok=True)
     detector.start()
     grace_worker.start()         # auto-releases bookings after the 15-minute grace period
@@ -49,6 +55,8 @@ app.add_middleware(
 )
 app.include_router(reservation_router)
 app.include_router(auth_router)
+app.include_router(notification_router)
+app.include_router(penalty_router)
 
 # endpoints that change the set-up need a logged-in operator (see auth.py)
 OPERATOR_ONLY = [Depends(require_operator)]
