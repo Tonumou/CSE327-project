@@ -55,3 +55,12 @@ UPLOAD_DIR = "uploads"
 
 # Websites allowed to call the API (CORS). "*" = any (fine for local XAMPP use)
 ALLOWED_ORIGINS = ["*"]
+
+# Google sign-in (Feature 5, federated identity). Paste the "Client ID" of an
+# OAuth client of type "Web application" made at
+#   https://console.cloud.google.com/apis/credentials
+# whose "Authorized JavaScript origins" are the addresses you open the website on:
+#   http://localhost   http://localhost:8080   http://localhost:5173
+# (see README.txt, "GOOGLE SIGN-IN"). Empty = the "Continue with Google" button
+# explains that Google sign-in is not set up yet; email + password still works.
+GOOGLE_CLIENT_ID = ""
