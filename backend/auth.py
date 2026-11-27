@@ -178,6 +178,12 @@ def require_operator(authorization: str | None = Header(None)):
     return user
 
 
+def require_user(authorization: str | None = Header(None)):
+    """Used on endpoints for any logged-in account (driver or operator), e.g.
+    booking a space: the booking then belongs to that account."""
+    return user_from_header(authorization)
+
+
 # ---------- profile (Settings page) ----------
 
 class ProfileIn(BaseModel):

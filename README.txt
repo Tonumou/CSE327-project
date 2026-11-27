@@ -200,8 +200,27 @@ STEP 8 - USE IT
 4. For a live webcam: click "Use the webcam" in the Camera source box.
    For a CCTV camera: type its rtsp://... address and click "Use".
 5. "Reserve a Spot": book a free space; enter the 4-digit PIN within
-   15 minutes to check in. "History": chart of free / occupied
+   15 minutes to check in. "Leave & check out" ends the session (it
+   also ends by itself when the booked time is over and the camera
+   sees the space empty). "History": chart of free / occupied
    spaces over time (CSV download).
+6. Car park full? On "Reserve a Spot" click "Join the waitlist" and
+   choose the type of space and how long you can wait. The first
+   driver in the queue gets the next free space of that type booked
+   automatically; the PIN arrives under the bell (top bar).
+7. No-show rules: cancelling before check-in is free. Not checking in
+   within 15 minutes costs one hour of the space's price, added to
+   your next booking. 3 no-shows in 30 days pause booking for 24 hours.
+   (Change the numbers at the top of backend\penalties.py.)
+8. EV charging: the operator marks spaces as "EV charging" on the
+   Slot Setup page. Drivers book a charger for a charging time
+   (30 min - 4 h), paid per minute at $5.00/hour; charging starts at
+   check-in. When charging is done the driver has 10 minutes to move,
+   then an idle fee of $0.50/minute (max $30) is added at check-out.
+   The "EV chargers" panel (EV filter on "Reserve a Spot", and the
+   dashboard) shows when each charger will be free; the operator gets
+   a message when a charged car blocks a charger.
+   (Change the numbers at the top of backend\ev_charging.py.)
 
 Forgot the operator password? Reset the accounts in cmd (this deletes
 all accounts; the next one registered becomes the operator again):
