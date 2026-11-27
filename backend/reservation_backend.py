@@ -13,6 +13,7 @@
 # ------------------------------------------------------------
 import datetime
 import decimal
+import math
 import random
 import string
 import threading
@@ -22,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 import database
+import ev_charging
 import penalties
 from auth import require_operator, require_user
 from notifications import notify
@@ -58,6 +60,8 @@ class ReservationCreate(BaseModel):
     driver_email: str = Field(min_length=3, max_length=120)
     license_plate: str = Field(min_length=1, max_length=30)
     duration_hours: int = Field(default=1, ge=1, le=24)
+    # EV chargers only: booked (and paid) by charging time instead of hours
+    charging_minutes: Optional[int] = Field(default=None, ge=15, le=480)
     slot_type: Optional[str] = "standard"
 
 
@@ -133,6 +137,7 @@ def ensure_reservation_tables():
               start_time DATETIME NOT NULL,
               end_time DATETIME NOT NULL,
               duration_hours INT NOT NULL DEFAULT 1,
+              charging_minutes INT NULL,
               total_price DECIMAL(6,2) NOT NULL DEFAULT 0.00,
               status ENUM('pending', 'active', 'completed', 'cancelled', 'expired') NOT NULL DEFAULT 'pending',
               grace_deadline DATETIME NOT NULL,
@@ -148,6 +153,7 @@ def ensure_reservation_tables():
         # tables made by an older version: bookings did not belong to an account yet
         database.add_column(cur, "reservations", "user_id", "INT NULL AFTER slot_id")
         database.add_column(cur, "reservations", "checked_out_at", "DATETIME NULL AFTER checked_in_at")
+        database.add_column(cur, "reservations", "charging_minutes", "INT NULL AFTER duration_hours")
     conn.close()
 
 
@@ -182,26 +188,36 @@ def release_slot(cur, slot_id):
     cur.execute("UPDATE slots SET status = 'free' WHERE id = %s AND status = 'reserved'", (slot_id,))
 
 
-def insert_reservation(cur, user_id, slot, driver_name, driver_email, license_plate, duration_hours):
+def booked_minutes(res):
+    """How long a booking lasts once the driver has checked in."""
+    return res.get("charging_minutes") or res["duration_hours"] * 60
+
+
+def insert_reservation(cur, user_id, slot, driver_name, driver_email, license_plate, duration_hours,
+                       charging_minutes=None):
     """Create a 'pending' booking on a space that claim_slot() already holds.
-    Returns the ticket (with the check-in PIN) for the driver."""
+    Returns the ticket (with the check-in PIN) for the driver.
+    EV chargers are booked by charging time in minutes (Feature 4, ev_charging.py),
+    every other space by whole hours."""
+    is_ev = slot.get("slot_type") == "ev_charging"
+    minutes = (charging_minutes or duration_hours * 60) if is_ev else duration_hours * 60
     now = datetime.datetime.now()
-    end_time = now + datetime.timedelta(hours=duration_hours)
+    end_time = now + datetime.timedelta(minutes=minutes)
     grace_deadline = now + datetime.timedelta(minutes=GRACE_PERIOD_MINUTES)
     hourly_rate = float(slot.get("hourly_rate") or 2.50)
-    total_price = round(hourly_rate * duration_hours, 2)
+    total_price = round(hourly_rate * minutes / 60, 2)
     res_code = generate_reservation_code()
     pin = generate_pin()
 
     cur.execute("""
         INSERT INTO reservations
         (reservation_code, slot_id, user_id, driver_name, driver_email, license_plate,
-         start_time, end_time, duration_hours, total_price, status, grace_deadline, checkin_pin)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s)
+         start_time, end_time, duration_hours, charging_minutes, total_price, status, grace_deadline, checkin_pin)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s)
     """, (
         res_code, slot["id"], user_id, driver_name.strip(), driver_email.strip(),
-        license_plate.strip().upper(), now, end_time, duration_hours,
-        total_price, grace_deadline, pin
+        license_plate.strip().upper(), now, end_time, max(1, math.ceil(minutes / 60)),
+        minutes if is_ev else None, total_price, grace_deadline, pin
     ))
     res_id = cur.lastrowid
 
@@ -322,8 +338,8 @@ def create_reservation(data: ReservationCreate, user=Depends(require_user)):
             if not claim_slot(cur, slot["id"]):
                 raise HTTPException(400, f"Slot {slot['slot_code']} is not free any more")
             try:
-                ticket = insert_reservation(cur, user["id"], slot, data.driver_name,
-                                            data.driver_email, data.license_plate, data.duration_hours)
+                ticket = insert_reservation(cur, user["id"], slot, data.driver_name, data.driver_email,
+                                            data.license_plate, data.duration_hours, data.charging_minutes)
             except Exception:
                 release_slot(cur, slot["id"])
                 raise
@@ -353,8 +369,8 @@ def checkin_reservation(res_id: int, req: CheckinRequest, user=Depends(require_u
             if str(res["checkin_pin"]).strip() != req.checkin_pin.strip():
                 raise HTTPException(400, "Invalid 4-digit PIN")
 
-            # the booked time starts when the driver arrives
-            end_time = now + datetime.timedelta(hours=res["duration_hours"])
+            # the booked time (or the EV charging time) starts when the driver arrives
+            end_time = now + datetime.timedelta(minutes=booked_minutes(res))
             cur.execute("""
                 UPDATE reservations
                 SET status = 'active', checked_in_at = %s, end_time = %s
@@ -400,16 +416,29 @@ def checkout_reservation(res_id: int, user=Depends(require_user)):
             res = _load_owned(cur, res_id, user)
             if res["status"] != "active":
                 raise HTTPException(400, f"Only a checked-in booking can be checked out (this one is {res['status']})")
-            cur.execute("UPDATE reservations SET status = 'completed', checked_out_at = %s WHERE id = %s",
-                        (datetime.datetime.now(), res_id))
+            fee = finish_session(cur, res, datetime.datetime.now())
             # if the camera still sees the car it marks the space 'occupied' again
             cur.execute("UPDATE slots SET status = 'free' WHERE id = %s AND status IN ('occupied', 'reserved')",
                         (res["slot_id"],))
     finally:
         conn.close()
     grace_worker.wake()
-    return {"message": "Checked out. Thank you for parking with us!", "status": "completed",
-            "total_price": float(res["total_price"])}
+    message = "Checked out. Thank you for parking with us!"
+    if fee:
+        message += f" An idle fee of ${fee:.2f} was added for staying at the charger after charging."
+    return {"message": message, "status": "completed", "idle_fee": fee,
+            "total_price": round(float(res["total_price"]) + fee, 2)}
+
+
+def finish_session(cur, res, now):
+    """Mark a checked-in booking 'completed'. An EV that stayed at the charger after
+    its charging time pays the idle fee (ev_charging.py). Returns that fee."""
+    fee = ev_charging.idle_fee(res["end_time"], now) if res["slot_type"] == "ev_charging" else 0.0
+    cur.execute("""
+        UPDATE reservations SET status = 'completed', checked_out_at = %s,
+               idle_fee = %s, total_price = total_price + %s
+        WHERE id = %s""", (now, fee, fee, res["id"]))
+    return fee
 
 
 # ---------- Background jobs (run by the worker below) ----------
@@ -436,11 +465,11 @@ def complete_finished_sessions(cur):
     cur.execute(RESERVATION_SELECT + " WHERE r.status = 'active' AND r.end_time < %s AND s.status = 'free'", (now,))
     for res in cur.fetchall():
         print(f"[GraceWorker] Reservation {res['reservation_code']} finished: the car has left {res['slot_code']}.")
-        cur.execute("UPDATE reservations SET status = 'completed', checked_out_at = %s WHERE id = %s",
-                    (now, res["id"]))
+        fee = finish_session(cur, res, now)
         notify(cur, res["user_id"], "session_completed", f"Parking at {res['slot_code']} ended",
                f"Your booked time is over and the camera saw your car leave {res['slot_code']}. "
-               "The session was checked out for you. Thank you!")
+               "The session was checked out for you."
+               + (f" An idle fee of ${fee:.2f} was added for staying at the charger." if fee else " Thank you!"))
 
 
 # ---------- Background Dynamic Grace Period Auto-Release Worker ----------
