@@ -79,8 +79,8 @@ export default function Dashboard({ onReserve }: { onReserve: () => void }) {
             </h2>
             <p className="mt-2 max-w-lg text-sm text-stone-400">Counted from the camera every second. A booked space is held for 15 minutes.</p>
             <div className="mt-5 flex flex-wrap items-center gap-3">
-              <button onClick={onReserve} disabled={free === 0} className="btn bg-paint text-stone-900 hover:bg-yellow-400">
-                <CalendarCheck className="size-4" /> Reserve a space
+              <button onClick={onReserve} disabled={total === 0} className="btn bg-paint text-stone-900 hover:bg-yellow-400">
+                <CalendarCheck className="size-4" /> {free === 0 && total > 0 ? "Join the waitlist" : "Reserve a space"}
               </button>
               <span className="flex items-center gap-1.5 text-xs text-stone-400">
                 <Clock className="size-3.5" /> Last count {status?.last_update ? status.last_update.slice(11) : "-"}
