@@ -27,8 +27,8 @@ from reservation_backend import router as reservation_router
 async def lifespan(app: FastAPI):
     # runs once when the server starts
     database.init_database()
+    ensure_auth_tables()         # user accounts: login / registration (bookings belong to one)
     ensure_reservation_tables()  # Feature 3 (Mou): reservations table + slot type/tariff
-    ensure_auth_tables()         # user accounts: login / registration
     os.makedirs(config.UPLOAD_DIR, exist_ok=True)
     detector.start()
     grace_worker.start()         # auto-releases bookings after the 15-minute grace period
